@@ -12,25 +12,59 @@
  * under the hamburger (three horizontal lines), also hidden under "More Tools." 
  */
 
+/**
+ * Simple Assert which checks a condition and throws and error with the specified message if false
+ * @param {number} condition - Check condition. 
+ * @param {number} end - Error message to throw if false.
+ * @returns {null} 
+ * */ 
+function assert(condition, message) {
+  if (!condition) throw "AssertionError: " + message
+}
+
+/**
+ * Checks if a string/line ends in a hyphen, indicating a hyphenated linebreak.
+ * @param {number} str - String to check for hyphen termination. 
+ * @returns {boolean} - True if string ends in a hyphen otherwise false.
+ * */ 
 function checkHyphenBreak(str) {
-    return str[str.length - 1] === '-'
+  return str.length !== 0 && str[str.length - 1] === '-'
 }
 
+/**
+ * Checks if a string/line starts with any of the defined punctuation marks.
+ * @param {string} str - string representing a line to check against leading punctuation marks. 
+ * @returns {boolean} - True indicating presence and False indicating no presence.
+ * */ 
 function checkLeadingPunctuation(str) {
-    return ['.', ',', '?', '!', ':', ';', "'", '"'].some(c => c === str[0])
+    return str.length !== 0 && ['.', ',', '?', '!', ':', ';', "'", '"'].some(c => c === str[0])
 }
 
+/**
+ * Creates an array representing the inclusive range between two non-negative integers, where start <= end.
+ * @param {number} start - The non-negative start index. 
+ * @param {number} end - The last non-negative index to include.
+ * @returns {Array} - An inclusive range of indicies from start to end including all integers in between.
+ * */ 
 function intRangeInclusive(start, end) {
+    assert(start <= end, "Invalid range")
     return Array.from({ length: (end + 1) - start }).map((_, i) => i + start)
 }
 
+/**
+ * Looks back from the next unmatched line position and returns the precise line and character index to resume search from
+ * it makes sure to take into account line boundaries when looking back as well the possibility of multi line matches.
+ * @param {number} nextUnmatchPosition - The index representing the next unmatched line. 
+ * @param {Array} contentArray - An array of all the lines for the current document.
+ * @param {number} lookbackAmount - The amount of characters to lookback.
+ * @returns {Array} - Of size two where the first is the line to start at and the second is the character index to continue search from.
+ * */ 
 function skipAhead(nextUnmatchPosition, contentArray, lookbackAmount) {
-
     let remainLookback = lookbackAmount - (checkLeadingPunctuation(contentArray[nextUnmatchPosition]["Text"]) || checkHyphenBreak(contentArray[nextUnmatchPosition - 1]["Text"]) ? 1 : 2)
     let skipContentPosition = nextUnmatchPosition,
         skipContentIndex = 0
-    if (remainLookback <= 0) return [skipContentPosition, skipContentIndex]
-    while (remainLookback > 0) {
+    if (remainLookback <= 0) return [skipContentPosition, skipContentIndex] // Short lookback only from first character to start of line (which potentially contains a space)
+    while (remainLookback > 0) { // Lookback spans back one or more lines
         skipContentPosition--
         if (skipContentPosition === 0) {
             let offset = checkHyphenBreak(contentArray[skipContentPosition]["Text"]) ? 2 : 1
@@ -38,7 +72,6 @@ function skipAhead(nextUnmatchPosition, contentArray, lookbackAmount) {
             remainLookback = 0
         } else {
             let offset = 0
-            // console.log("pos = " + skipContentPosition)
             if (contentArray[skipContentPosition]["Text"].trim() === "") {
                 continue
             }
@@ -49,7 +82,6 @@ function skipAhead(nextUnmatchPosition, contentArray, lookbackAmount) {
                 remainLookback = 0
             } else {
                 remainLookback -= (contentArray[skipContentPosition]["Text"].length - offset)
-                //skipContentPosition-- 
             }
         }
     }
@@ -60,12 +92,19 @@ function skipAhead(nextUnmatchPosition, contentArray, lookbackAmount) {
     ]
 }
 
+/**
+ * Looks ahead in the content to get accumulate a string to match against the search term.
+ * @param {Array} contentArray - The content array of lines of the current document.
+ * @param {number} initialIndex - The line index to start looking from.
+ * @param {number} initialPosition - The index within the current line to start looking from.
+ * @param {number} lookaheadAmount - The amount of characters to accumulate.
+ * @returns {object || string} - An object representing a match spanning multiple lines or a string representing a substring of the current line to be matched against.
+ * */ 
 function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount) {
     const initHyphenBreak = checkHyphenBreak(contentArray[initialIndex]["Text"])
-    // console.log(" Lookahead amount = " + lookaheadAmount, "  Remaining = " + (contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))))
-    if (lookaheadAmount <= contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))) {
+    if (lookaheadAmount <= contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))) { // lookahead fits in the current line
         return contentArray[initialIndex]["Text"].slice(initialPosition, initialPosition + lookaheadAmount)
-    } else {
+    } else { // lookahead spans multiple lines
         let content = contentArray[initialIndex]["Text"].slice(initialPosition, contentArray[initialIndex]["Text"].length - (initHyphenBreak ? 1 : 0)),
             prevHyphen = initHyphenBreak,
             remainingLookahead = lookaheadAmount - (contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))),
@@ -84,7 +123,6 @@ function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount)
             content += contentAdd
             contentAdd = ""
         }
-        // console.log("content = ", content)
         return {
             matchString: content,
             matchRange: intRangeInclusive(initialIndex, currentIndex)
@@ -92,8 +130,19 @@ function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount)
     }
 }
 
+/**
+ * A reducer function to count up characters across lines while accounting for line boundaries.
+ * @param {number} p - The current count of characters.
+ * @param {object} c - A JS Object representing a single line of content from a documents.
+ * @param {number} i - Current index through the array being reduced.
+ * @param {Array} arr - A readonly reference to the array being iterated through.
+ * @returns {number} - The new or current count of characters.
+ * */ 
 function getRemainingCharacters(p, c, i, arr) {
-    // Add assertions for all Content here
+    assert(typeof c === "object", `Document->Content[${i}] is not an object`)
+    assert(typeof c["Text"] === "string", `Document->Content[${i}]->Text is not a string`) 
+    assert(typeof c["Page"] === "number", `Document->Content[${i}]->Page is not a number`)
+    assert(typeof c["Line"] === "number", `Document->Content[${i}]->Line is not a number`)
     const ct = c["Text"]
     if (ct.trim() === "") return p
     if (i === 0 || checkHyphenBreak(arr[i - 1]["Text"]) || !checkLeadingPunctuation(ct)) {
@@ -103,11 +152,6 @@ function getRemainingCharacters(p, c, i, arr) {
     }
 }
 
-// Assume if that new lines do not start with a space between words from the preceeding line
-// function mergeLines(acc, line) {
-//     const lineHyphenBreak = line[line.length - 1] === '-'
-//     return acc + (lineHyphenBreak ? line.splice(0, line.length - 1) : line + " ")
-// }
 
 /**
  * Searches for matches in scanned text.
@@ -115,26 +159,29 @@ function getRemainingCharacters(p, c, i, arr) {
  * @param {JSON} scannedTextObj - A JSON object representing the scanned text.
  * @returns {JSON} - Search results.
  * */ 
-// Assuming scanned content array is ordered first by Page and then by Line 
-// Assuming If a match is found early in a piece of content early termination is not an option since it may also contain a leading (prefix) match into the next content which on its own may not contain a contiguous match
 function findSearchTermInBooks(searchTerm, scannedTextObj) {
-    /** You will need to implement your search and 
-     * return the appropriate object here. */
+    assert(typeof searchTerm === "string", "searchTerm is not a string")
+    assert(typeof scannedTextObj === "object", "scannedTextObj is not an object")
+    
     const emptyResult = {
         "SearchTerm": searchTerm,
         "Results": []
     }
 
-    if (searchTerm.trim() === "") return emptyResult 
+    if (searchTerm.trim() === "") return emptyResult // Empty Search case
     
-    return scannedTextObj.reduce((searchRes, currentDoc) => {
+    return scannedTextObj.reduce((searchRes, currentDoc, k) => {
+        assert(typeof currentDoc === "object", `Document[${k}] is not an object`)
+        assert(typeof currentDoc["ISBN"] === "string", `Document[${k}]->ISBN is not a string`)
+        assert(typeof currentDoc["Title"] === "string", `Document[${k}]->Title is not a string`)
+        assert(Array.isArray(currentDoc["Content"]), `Document[${k}]->Content is not an array`)
         const ISBN = currentDoc["ISBN"],
               Content = currentDoc["Content"]
 
         const totalCharacters = Content.reduce(getRemainingCharacters, 0) // Add all characters, minus 1 for hyphenated linebreaks, plus 1 for spaces between lines
         let contentMatches = new Set()
         let remainingCharacters = totalCharacters
-        if (remainingCharacters === 0 || remainingCharacters < searchTerm.length) return searchRes
+        if (remainingCharacters === 0 || remainingCharacters < searchTerm.length) return searchRes // Initial Base case, not enough characters for search
         let searchPos = 0,
             contentPos = 0,
             currentContent = Content[contentPos]["Text"]
@@ -142,15 +189,11 @@ function findSearchTermInBooks(searchTerm, scannedTextObj) {
             contentPos++
             currentContent = Content[contentPos]["Text"] 
         }
-        // console.log("Pre for")
         for (let i = 0; i < currentContent.length;) {
-            // console.log("i = " + i + " remaining chars = " + remainingCharacters)
-            if (remainingCharacters < searchTerm.length || contentMatches.size === Content.length) break; // Base case, not enough characters to get a match or all content is matched no further search is necessary
+            if (remainingCharacters < searchTerm.length || contentMatches.size === Content.length) break; // Iterative Base case, not enough characters to get a match or all content is matched no further search is necessary
             const matchOnLinebreak = (i === 0 && contentPos > 0 && !checkHyphenBreak(Content[contentPos - 1]["Text"]) && !checkLeadingPunctuation(Content[contentPos]["Text"]) && searchTerm[searchPos] === " ")
             if (currentContent[i] === searchTerm[searchPos] || matchOnLinebreak) {
-                // console.log("Pre lookahead")
                 const lookAheadResult = lookAhead(Content, contentPos, i, searchTerm.length - (matchOnLinebreak ? 1 : 0))
-                // console.log("Lookahead res = " + JSON.stringify(lookAheadResult))
                 if (typeof lookAheadResult === "string") {
                     if (searchTerm === (matchOnLinebreak ? " " : "") + lookAheadResult) {
                         contentMatches.add(contentPos)
@@ -166,8 +209,6 @@ function findSearchTermInBooks(searchTerm, scannedTextObj) {
                         } else {
                             remainingCharacters = [ { ...Content[contentPos], "Text": Content[contentPos]["Text"].slice(i) } ].concat(Content.slice(contentPos + 1)).reduce(getRemainingCharacters, (i === 0 && !(checkHyphenBreak(Content[contentPos - 1]["Text"]) || checkLeadingPunctuation(Content[contentPos]["Text"]))) ? 1 : 0) 
                         }
-                        //remainingCharacters = (contentPos < Content.length - 1 ? Content.slice(contentPos + 1) : Content.slice(contentPos)).reduce(getRemainingCharacters, ) //resuse reducer
-                        //Skip Ahead logic
                          continue
                     } 
                 } else {
@@ -179,8 +220,6 @@ function findSearchTermInBooks(searchTerm, scannedTextObj) {
                         contentPos = skipContentPos
                         currentContent = Content[contentPos]["Text"]
                         i = skipI
-                        //remainingCharacters = // reuse reducer 
-                        //Skip Ahead logic
                         if (contentPos === 0) {
                             remainingCharacters = [ { ...Content[0], "Text": Content[0]["Text"].slice(i) } ].concat(Content.slice(1)).reduce(getRemainingCharacters, 0)
                         } else if (contentPos === Content.length - 1) {
@@ -649,6 +688,77 @@ const NegativeTestCases = [["", twentyLeaguesIn, {
     "Results": []
   }]]
 
+const CaseSensitiveTestCases = [
+  ["Eyes", twentyLeaguesIn, {
+    "SearchTerm": "Eyes",
+    "Results": []
+  }],
+  ["Now simply went on by her own momentum.  The darkness was then profound", highSkipDuplicateSpace, {
+    "SearchTerm": "Now simply went on by her own momentum.  The darkness was then profound",
+    "Results": []
+  }],
+  ["I", twentyLeaguesIn, {
+    "SearchTerm": "I",
+    "Results": [
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 10
+      }
+    ]
+  }],
+  ["The darkness", interspersedEmptyLineSpace, {
+    "SearchTerm": "The darkness",
+    "Results": [
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 8
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 9
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 10
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 11
+      }
+    ]
+  }],
+  ["The", highSkipDuplicateSpace, {
+    "SearchTerm": "The",
+    "Results": [
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 8
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 12
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 8
+      },
+      {
+        "ISBN": "9780000528531",
+        "Page": 31,
+        "Line": 12
+      }
+    ]
+  }]
+]
+
 const testRunner = (val, i) => {
     const [term, space, expected] = val
     const result = findSearchTermInBooks(term, space)
@@ -674,6 +784,8 @@ const runAllTests = () => {
     PositiveTestCases.forEach(testRunner)
     console.log("Negative Test Cases")
     NegativeTestCases.forEach(testRunner)
+    console.log("Case Sensitive Test Cases")
+    CaseSensitiveTestCases.forEach(testRunner)
 }
 
 runAllTests()
