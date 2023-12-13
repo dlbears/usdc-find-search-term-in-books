@@ -16,13 +16,53 @@ function checkHyphenBreak(str) {
     return str[str.length - 1] === '-'
 }
 
+function checkLeadingPunctuation(str) {
+    return ['.', ',', '?', '!', ':', ';', "'", '"'].some(c => c === str[0])
+}
+
 function intRangeInclusive(start, end) {
     return Array.from({ length: (end + 1) - start }).map((_, i) => i + start)
 }
 
+function skipAhead(nextUnmatchPosition, contentArray, lookbackAmount) {
+
+    let remainLookback = lookbackAmount - (checkLeadingPunctuation(contentArray[nextUnmatchPosition]["Text"]) || checkHyphenBreak(contentArray[nextUnmatchPosition - 1]["Text"]) ? 1 : 2)
+    let skipContentPosition = nextUnmatchPosition,
+        skipContentIndex = 0
+    if (remainLookback <= 0) return [skipContentPosition, skipContentIndex]
+    while (remainLookback > 0) {
+        skipContentPosition--
+        if (skipContentPosition === 0) {
+            let offset = checkHyphenBreak(contentArray[skipContentPosition]["Text"]) ? 2 : 1
+            skipContentIndex = contentArray[0]["Text"].length - (remainLookback + offset)
+            remainLookback = 0
+        } else {
+            let offset = 0
+            // console.log("pos = " + skipContentPosition)
+            if (contentArray[skipContentPosition]["Text"].trim() === "") {
+                continue
+            }
+            if (checkHyphenBreak(contentArray[skipContentPosition]["Text"])) offset++
+            if (checkLeadingPunctuation(contentArray[skipContentPosition]["Text"])) offset--
+            if (remainLookback <= contentArray[skipContentPosition]["Text"].length - offset) {
+                skipContentIndex = contentArray[skipContentPosition]["Text"].length - (remainLookback + offset)
+                remainLookback = 0
+            } else {
+                remainLookback -= (contentArray[skipContentPosition]["Text"].length - offset)
+                //skipContentPosition-- 
+            }
+        }
+    }
+
+    return [
+        skipContentPosition, 
+        skipContentIndex
+    ]
+}
+
 function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount) {
     const initHyphenBreak = checkHyphenBreak(contentArray[initialIndex]["Text"])
-    console.log(" Lookahead amount = " + lookaheadAmount, "  Remaining = " + (contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))))
+    // console.log(" Lookahead amount = " + lookaheadAmount, "  Remaining = " + (contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))))
     if (lookaheadAmount <= contentArray[initialIndex]["Text"].length - (initialPosition + (initHyphenBreak ? 1 : 0))) {
         return contentArray[initialIndex]["Text"].slice(initialPosition, initialPosition + lookaheadAmount)
     } else {
@@ -33,8 +73,9 @@ function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount)
             contentAdd = ""
         while (remainingLookahead > 0 && currentIndex + 1 < contentArray.length) {
             currentIndex++
-            contentAdd = (prevHyphen ? "" : " ")
-            remainingLookahead -= (prevHyphen ? 0 : 1)
+            if (contentArray[currentIndex]["Text"].trim() === "") continue
+            contentAdd = (prevHyphen || checkLeadingPunctuation(contentArray[currentIndex]["Text"]) ? "" : " ")
+            remainingLookahead -= (prevHyphen || checkLeadingPunctuation(contentArray[currentIndex]["Text"]) ? 0 : 1)
             prevHyphen = checkHyphenBreak(contentArray[currentIndex]["Text"])
             contentAdd += (contentArray[currentIndex]["Text"].length > remainingLookahead
                             ? contentArray[currentIndex]["Text"].slice(0, remainingLookahead)
@@ -43,11 +84,22 @@ function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount)
             content += contentAdd
             contentAdd = ""
         }
-        console.log("content = ", content)
+        // console.log("content = ", content)
         return {
             matchString: content,
             matchRange: intRangeInclusive(initialIndex, currentIndex)
         }
+    }
+}
+
+function getRemainingCharacters(p, c, i, arr) {
+    // Add assertions for all Content here
+    const ct = c["Text"]
+    if (ct.trim() === "") return p
+    if (i === 0 || checkHyphenBreak(arr[i - 1]["Text"]) || !checkLeadingPunctuation(ct)) {
+        return p + (checkHyphenBreak(ct) ? ct.length - 1 : ct.length + 1) 
+    } else {
+        return p + (checkHyphenBreak(ct) ? ct.length - 2 : ct.length - 1)
     }
 }
 
@@ -68,75 +120,98 @@ function lookAhead(contentArray, initialIndex, initialPosition, lookaheadAmount)
 function findSearchTermInBooks(searchTerm, scannedTextObj) {
     /** You will need to implement your search and 
      * return the appropriate object here. */
+    const emptyResult = {
+        "SearchTerm": searchTerm,
+        "Results": []
+    }
+
+    if (searchTerm.trim() === "") return emptyResult 
+    
     return scannedTextObj.reduce((searchRes, currentDoc) => {
         const ISBN = currentDoc["ISBN"],
               Content = currentDoc["Content"]
 
-        const totalCharacters = Content.reduce((p, c) => p + (c["Text"][c["Text"].length - 1] === '-' ? c["Text"].length - 1 : c["Text"].length + 1), 0) // Add all characters, minus 1 for hyphenated linebreaks, plus 1 for spaces between lines
+        const totalCharacters = Content.reduce(getRemainingCharacters, 0) // Add all characters, minus 1 for hyphenated linebreaks, plus 1 for spaces between lines
         let contentMatches = new Set()
         let remainingCharacters = totalCharacters
+        if (remainingCharacters === 0 || remainingCharacters < searchTerm.length) return searchRes
         let searchPos = 0,
             contentPos = 0,
             currentContent = Content[contentPos]["Text"]
-        console.log("Pre for")
+        while (currentContent.trim() === "") {
+            contentPos++
+            currentContent = Content[contentPos]["Text"] 
+        }
+        // console.log("Pre for")
         for (let i = 0; i < currentContent.length;) {
-            if (remainingCharacters < searchTerm.length) break; // Base case, not enough characters to get a match
-            if (contentMatches.size === Content.length) break; // Base case, if all content is matched no further search is necessary
-            if (currentContent[i] === searchTerm[searchPos]) {
-                console.log("Pre lookahead")
-                const lookAheadResult = lookAhead(Content, contentPos, i, searchTerm.length)
-                console.log("Lookahead res = " + JSON.stringify(lookAheadResult))
+            // console.log("i = " + i + " remaining chars = " + remainingCharacters)
+            if (remainingCharacters < searchTerm.length || contentMatches.size === Content.length) break; // Base case, not enough characters to get a match or all content is matched no further search is necessary
+            const matchOnLinebreak = (i === 0 && contentPos > 0 && !checkHyphenBreak(Content[contentPos - 1]["Text"]) && !checkLeadingPunctuation(Content[contentPos]["Text"]) && searchTerm[searchPos] === " ")
+            if (currentContent[i] === searchTerm[searchPos] || matchOnLinebreak) {
+                // console.log("Pre lookahead")
+                const lookAheadResult = lookAhead(Content, contentPos, i, searchTerm.length - (matchOnLinebreak ? 1 : 0))
+                // console.log("Lookahead res = " + JSON.stringify(lookAheadResult))
                 if (typeof lookAheadResult === "string") {
-                    if (searchTerm === lookAheadResult) {
+                    if (searchTerm === (matchOnLinebreak ? " " : "") + lookAheadResult) {
                         contentMatches.add(contentPos)
-                         //Skip Ahead logic
+                        if (contentPos + 1 >= Content.length) break
+                        const [skipContentPos, skipI] = skipAhead(contentPos + 1, Content, searchTerm.length) 
+                        contentPos = skipContentPos
+                        currentContent = Content[contentPos]["Text"]
+                        i = skipI 
+                        if (contentPos === 0) {
+                            remainingCharacters = [ { ...Content[0], "Text": Content[0]["Text"].slice(i) } ].concat(Content.slice(1)).reduce(getRemainingCharacters, 0)
+                        } else if (contentPos === Content.length - 1) {
+                            remainingCharacters = currentContent.length + (i === 0 ? ((checkHyphenBreak(Content[contentPos - 1]["Text"]) || checkLeadingPunctuation(Content[contentPos]["Text"])) ? 0 : 1) : currentContent.slice(i).length)
+                        } else {
+                            remainingCharacters = [ { ...Content[contentPos], "Text": Content[contentPos]["Text"].slice(i) } ].concat(Content.slice(contentPos + 1)).reduce(getRemainingCharacters, (i === 0 && !(checkHyphenBreak(Content[contentPos - 1]["Text"]) || checkLeadingPunctuation(Content[contentPos]["Text"]))) ? 1 : 0) 
+                        }
+                        //remainingCharacters = (contentPos < Content.length - 1 ? Content.slice(contentPos + 1) : Content.slice(contentPos)).reduce(getRemainingCharacters, ) //resuse reducer
+                        //Skip Ahead logic
+                         continue
                     } 
-                    i++
                 } else {
                     const { matchString, matchRange } = lookAheadResult
-                    if (searchTerm === matchString) {
+                    if (searchTerm === (matchOnLinebreak ? " " : "") + matchString) {
                         matchRange.forEach(x => contentMatches.add(x))
-                         //Skip Ahead logic
+                        if (matchRange[matchRange.length - 1] + 1 >= Content.length) break
+                        const [skipContentPos, skipI] = skipAhead(matchRange[matchRange.length - 1] + 1, Content, searchTerm.length)
+                        contentPos = skipContentPos
+                        currentContent = Content[contentPos]["Text"]
+                        i = skipI
+                        //remainingCharacters = // reuse reducer 
+                        //Skip Ahead logic
+                        if (contentPos === 0) {
+                            remainingCharacters = [ { ...Content[0], "Text": Content[0]["Text"].slice(i) } ].concat(Content.slice(1)).reduce(getRemainingCharacters, 0)
+                        } else if (contentPos === Content.length - 1) {
+                            remainingCharacters = currentContent.length + (i === 0 ? ((checkHyphenBreak(Content[contentPos - 1]["Text"]) || checkLeadingPunctuation(Content[contentPos]["Text"])) ? 0 : 1) : currentContent.slice(i).length)
+                        } else {
+                            remainingCharacters = [ { ...Content[contentPos], "Text": Content[contentPos]["Text"].slice(i) } ].concat(Content.slice(contentPos + 1)).reduce(getRemainingCharacters, (i === 0 && !(checkHyphenBreak(Content[contentPos - 1]["Text"]) || checkLeadingPunctuation(Content[contentPos]["Text"]))) ? 1 : 0) 
+                        }
+                         continue
                     }
-                    i++
                 }
-            } else {
-                i++
             }
-            if (i >= currentContent.length && contentPos + 1 < Content.length) {
+            if ((i + 1 >= currentContent.length || (currentContent[i + 1] === '-' && i + 1 === currentContent.length - 1)) && contentPos + 1 < Content.length) {
+                remainingCharacters--
+                if (remainingCharacters < searchTerm.length) continue
                 contentPos++
                 currentContent = Content[contentPos]["Text"]
                 i = 0
+                while (currentContent.trim() === "") {
+                    contentPos++
+                    currentContent = Content[contentPos]["Text"]
+                }
+                continue
             }
+            i++
+            remainingCharacters--
         } 
         return {
             "SearchTerm": searchRes["SearchTerm"],
             "Results": [...searchRes["Results"], ...Array.from(contentMatches).map(i => ({ "ISBN": ISBN, "Page": Content[i]["Page"], "Line": Content[i]["Line"]}))]
         }
-        // return Content.reduce((docRes, currentContent, currentIndex) => {
-        //     //matchOverContent(searchTerm, currentIndex, contentArray)
-        //     currentContent.reduce((ms, char) => {
-
-        //     }, [])
-        //     let matches = []
-        //     let trackingMatch = false
-        //     let searchIndex = 0
-        //     for (let contentIndex = 0; contentIndex < currentContent.length; contentIndex++) {
-        //         let isFinalChar = contentIndex === currentContent.length - 1
-        //         if (trackingMatch && isFinalChar) {
-        //             if (currentContent[contentIndex] === '-') {
-
-        //             } else if (currentContent[contentIndex] === searchTerm[searchIndex]) {
-        //                 searchIndex++
-        //             }
-        //         }
-        //     }
-        //     return matches
-        // }, [])
-    }, {
-        "SearchTerm": searchTerm,
-        "Results": []
-    })
+    }, emptyResult)
 }
 
 /** Example input object. */
@@ -163,6 +238,170 @@ const twentyLeaguesIn = [
         ] 
     }
 ]
+
+const emptySearchSpace = [],
+      missingContentSpace = [
+        {
+            "Title": "Twenty Thousand Leagues Under the Sea",
+            "ISBN": "9780000528531",
+            "Content": [] 
+        }
+      ],
+      unhyphenatedPunctuationBreakSpace = [
+        {
+            "Title": "Twenty Thousand Leagues Under the Sea",
+            "ISBN": "9780000528531",
+            "Content": [
+                {
+                    "Page": 31,
+                    "Line": 8,
+                    "Text": "now simply went on by her own momentum.  The dark-"
+                },
+                {
+                    "Page": 31,
+                    "Line": 9,
+                    "Text": "ness was then profound; and however 'good the Canadian\'s"
+                },
+                {
+                    "Page": 31,
+                    "Line": 10,
+                    "Text": "  "
+                },
+                {
+                    "Page": 31,
+                    "Line": 11,
+                    "Text": "' eyes were, I asked myself how he had managed to see, and"
+                } 
+            ] 
+        }
+      ],
+      emptyLineSpace = [
+        {
+            "Title": "Twenty Thousand Leagues Under the Sea",
+            "ISBN": "9780000528531",
+            "Content": [
+                {
+                    "Page": 31,
+                    "Line": 8,
+                    "Text": ""
+                },
+                {
+                    "Page": 31,
+                    "Line": 9,
+                    "Text": "ness was then profound; and however good the Canadian\'s"
+                },
+                {
+                    "Page": 31,
+                    "Line": 10,
+                    "Text": "eyes were, I asked myself how he had managed to see, and"
+                } 
+            ] 
+        }
+      ],
+      interspersedEmptyLineSpace = [{
+        "Title": "Twenty Thousand Leagues Under the Sea",
+        "ISBN": "9780000528531",
+        "Content": [
+            {
+                "Page": 31,
+                "Line": 8,
+                "Text": "now simply went on by her own momentum.  The dark-"
+            },
+            {
+                "Page": 31,
+                "Line": 9,
+                "Text": ""
+            },
+            {
+                "Page": 31,
+                "Line": 10,
+                "Text": "  "
+            },
+            {
+                "Page": 31,
+                "Line": 11,
+                "Text": "ness was then profound; and however good the Canadian\'s"
+            },
+            {
+                "Page": 31,
+                "Line": 12,
+                "Text": "eyes were, I asked myself how he had managed to see, and"
+            } 
+        ] 
+    }],
+    highSkipDuplicateSpace = [{
+        "Title": "Twenty Thousand Leagues Under the Sea",
+        "ISBN": "9780000528531",
+        "Content": [
+            {
+                "Page": 31,
+                "Line": 8,
+                "Text": "now simply went on by her own momentum.  The dark-"
+            },
+            {
+                "Page": 31,
+                "Line": 9,
+                "Text": ""
+            },
+            {
+                "Page": 31,
+                "Line": 10,
+                "Text": "  "
+            },
+            {
+                "Page": 31,
+                "Line": 11,
+                "Text": "ness was then profound; and however good the Canadian\'s now sim-"
+            },
+            {
+                "Page": 31,
+                "Line": 12,
+                "Text": "ply went on by her own momentum.  The darkness was then profound"
+            }, 
+        ] 
+    },
+    {
+        "Title": "Twenty Thousand Leagues Under the Sea",
+        "ISBN": "9780000528531",
+        "Content": [
+            {
+                "Page": 31,
+                "Line": 8,
+                "Text": "now simply went on by her own momentum.  The dark-"
+            },
+            {
+                "Page": 31,
+                "Line": 9,
+                "Text": ""
+            },
+            {
+                "Page": 31,
+                "Line": 10,
+                "Text": "  "
+            },
+            {
+                "Page": 31,
+                "Line": 11,
+                "Text": "ness was then profound; and however good the Canadian\'s now sim-"
+            },
+            {
+                "Page": 31,
+                "Line": 12,
+                "Text": "ply went on by her own momentum.  The darkness was then profound"
+            }, 
+        ] 
+    }],
+    notEnoughContentSpace = [{
+        "Title": "Twenty Thousand Leagues Under the Sea",
+        "ISBN": "9780000528531",
+        "Content": [
+            {
+                "Page": 31,
+                "Line": 8,
+                "Text": "ey"
+            }
+        ] 
+    }]
     
 /** Example output object */
 const twentyLeaguesOut = {
@@ -193,49 +432,248 @@ const twentyLeaguesOut = {
  * */
 
 /** We can check that, given a known input, we get a known output. */
-const test1result = findSearchTermInBooks("the", twentyLeaguesIn);
-if (JSON.stringify(twentyLeaguesOut) === JSON.stringify(test1result)) {
-    console.log("PASS: Test 1");
-} else {
-    console.log("FAIL: Test 1");
-    console.log("Expected:", twentyLeaguesOut);
-    console.log("Received:", test1result);
+const PositiveTestCases = [
+    ["the", twentyLeaguesIn, twentyLeaguesOut],
+    ["darkness", twentyLeaguesIn, {
+        "SearchTerm": "darkness",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          }
+        ]
+      }],
+    ["the Canadian\'s eyes", twentyLeaguesIn, {
+        "SearchTerm": "the Canadian's eyes",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          }
+        ]
+      }],
+    ["  The darkness was then profound; and however good the Canadian\'s eyes were,", twentyLeaguesIn, {
+        "SearchTerm": "  The darkness was then profound; and however good the Canadian's eyes were,",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          }
+        ]
+      }],
+    ["a", twentyLeaguesIn, {
+        "SearchTerm": "a",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          }
+        ]
+      }],
+    [" eyes", twentyLeaguesIn, {
+        "SearchTerm": " eyes",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          }
+        ]
+      }],
+      ["ness", emptyLineSpace, {
+        "SearchTerm": "ness",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          }
+        ]
+      }], 
+      ["darkness", interspersedEmptyLineSpace, {
+        "SearchTerm": "darkness",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 11
+          }
+        ]
+      }],
+      ["'good the Canadian\'s'", unhyphenatedPunctuationBreakSpace, {
+        "SearchTerm": "'good the Canadian\'s'",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 11
+          }
+        ]
+      }],
+      ["now simply went on by her own momentum.  The darkness was then profound", highSkipDuplicateSpace, {
+        "SearchTerm": "now simply went on by her own momentum.  The darkness was then profound",
+        "Results": [
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 11
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 12
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 8
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 9
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 10
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 11
+          },
+          {
+            "ISBN": "9780000528531",
+            "Page": 31,
+            "Line": 12
+          }
+        ]
+      }]
+
+
+]
+
+const NegativeTestCases = [["", twentyLeaguesIn, {
+    "SearchTerm": "",
+    "Results": []
+  }],
+  ["   ", twentyLeaguesIn, {
+    "SearchTerm": "   ",
+    "Results": []
+  }],
+  ["eyes", emptySearchSpace, {
+    "SearchTerm": "eyes",
+    "Results": []
+  }],
+  ["eyes", missingContentSpace, {
+    "SearchTerm": "eyes",
+    "Results": []
+  }], 
+["eyes", notEnoughContentSpace, {
+    "SearchTerm": "eyes",
+    "Results": []
+  }]]
+
+const testRunner = (val, i) => {
+    const [term, space, expected] = val
+    const result = findSearchTermInBooks(term, space)
+    const testTag = ` [Test ${(i + 1)}]: `,
+          equalityTest = JSON.stringify(result) === JSON.stringify(expected),
+          lengthTest = result["Results"].length === expected["Results"].length
+    
+    if (equalityTest) console.log("PASS" + testTag + "Result equals Expectation")
+    else {
+        console.log("FAIL" + testTag + "Results do not equal Expectation")
+        console.log(`Expected Result: ${JSON.stringify(expected, null, 2)}\nResult recieved: ${JSON.stringify(result, null, 2)}`)
+    }
+    
+    if (lengthTest) console.log("PASS" + testTag + "Result length equals Expected length")
+    else {
+        console.log("FAIL" + testTag + "Result length does not equal Expected length")
+        console.log(`Expected Length: ${expected["Results"].length}\nResult Length: ${result["Results"].length}`)
+    }
 }
 
-/** We could choose to check that we get the right number of results. */
-const test2result = findSearchTermInBooks("the", twentyLeaguesIn); 
-if (test2result.Results.length == 1) {
-    console.log("PASS: Test 2");
-} else {
-    console.log("FAIL: Test 2");
-    console.log("Expected:", twentyLeaguesOut.Results.length);
-    console.log("Received:", test2result.Results.length);
+const runAllTests = () => {
+    console.log("Positive Test Cases")
+    PositiveTestCases.forEach(testRunner)
+    console.log("Negative Test Cases")
+    NegativeTestCases.forEach(testRunner)
 }
 
-console.log("Test 1 = " + JSON.stringify(test1result, null, 2))
-console.log("Test 2 = " + JSON.stringify(test2result, null, 2))
-console.log("Test 3 = " + JSON.stringify(findSearchTermInBooks("darkness", twentyLeaguesIn), null, 2))
-console.log("Test 4 = " + JSON.stringify(findSearchTermInBooks("the Canadian\'s eyes", twentyLeaguesIn), null, 2))
-console.log("Test 5 = " + JSON.stringify(findSearchTermInBooks("  The darkness was then profound; and however good the Canadian\'s eyes were,", twentyLeaguesIn), null, 2))
-
-// Positive Test Cases
-/*
-- Empty Search Term => Empty Result
-- Empty Search Space => Empty Result
-- Single-word search, normal and along the hyphenated linebreak
-- Single-word search, hyphenated compound, both where the word is within a line(s) and where it is on a hyphenated linebreak "well-\n-known"
-- Multi-word search term that is only present in one line
-- Multi-word search term that spans multiple lines (with and without hyphenated linebreaks)
-*/
-// Negative Test Cases
-/*
-- Incorrect search space schema 
-- Inproperly hyphenated linebreak on compound word (edge case - improperly normalized search space)
-- Line breaks in the search string (edge case - single line search term)
-- hyphenated compound with unhyphenated search term (edge case - sensitive to special characters)
-- whitespace discrepancy between words either in search space or term (edge case - precise/exact search not a similarity search; would be more challenging/complex and require tuning of how to weigh case-sensitivity in similar matches)
-- Expectation of multiple results on the same line; justification allows for faster unique search over shorter terms, can simply be added on via matchAll (edge case - at most one result per line)
-*/
-// Case Sensitive Test Cases
-// Single word (matching and non matching)
-// Multi word (matching, non matching, and spanning)
+runAllTests()
